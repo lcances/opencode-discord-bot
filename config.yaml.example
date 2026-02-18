@@ -1,0 +1,20 @@
+# OpenCode Discord Bot Configuration
+# Copy to config.yaml and fill in your values.
+
+discord:
+  token: "YOUR_DISCORD_BOT_TOKEN"
+  # Only listen to messages in these channels (by name).
+  # Leave empty to listen in all channels the bot has access to.
+  allowed_channels: []
+  # Command prefix for bot commands
+  prefix: "!"
+
+opencode:
+  # Host and port for the opencode serve process
+  hostname: "127.0.0.1"
+  port: 4096
+  # Optional: HTTP basic auth (set OPENCODE_SERVER_PASSWORD env var instead)
+  # username: "opencode"
+  # password: ""
+  # Working directory where opencode serve runs (your project root)
+  working_directory: "."
