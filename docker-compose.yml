@@ -8,6 +8,9 @@ services:
       - OPENCODE_SERVER_PASSWORD=${OPENCODE_SERVER_PASSWORD}
     env_file:
       - .env
+    ports:
+      - "8080:8080"
+
     # Security: ensure the container restarts automatically if it crashes
     # To start: docker-compose up -d --build
     # To stop: docker-compose down
