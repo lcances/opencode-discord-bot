@@ -49,6 +49,7 @@ class OpenCodeClient:
     @property
     def http(self) -> aiohttp.ClientSession:
         if self._http is None or self._http.closed:
+            log.debug("Creating new HTTP session for %s", self.base_url)
             self._http = aiohttp.ClientSession(
                 base_url=self.base_url,
                 auth=self._auth,
@@ -89,14 +90,19 @@ class OpenCodeClient:
 
     async def _wait_healthy(self, retries: int = 30, delay: float = 1.0) -> None:
         """Poll /global/health until the server responds."""
+        log.info("Waiting for OpenCode server to become healthy (max %d attempts) …", retries)
         for attempt in range(1, retries + 1):
             try:
                 data = await self.health()
                 if data.get("healthy"):
-                    log.info("OpenCode server healthy (attempt %d)", attempt)
+                    log.info("OpenCode server healthy (attempt %d/%d)", attempt, retries)
                     return
-            except (aiohttp.ClientError, ConnectionError, OSError):
-                pass
+                log.debug("Health check attempt %d/%d: not healthy yet", attempt, retries)
+            except (aiohttp.ClientError, ConnectionError, OSError) as exc:
+                log.debug(
+                    "Health check attempt %d/%d failed: %s",
+                    attempt, retries, exc,
+                )
             await asyncio.sleep(delay)
 
         raise RuntimeError(
@@ -106,21 +112,27 @@ class OpenCodeClient:
     async def stop_server(self) -> None:
         """Gracefully terminate the opencode serve process."""
         if self._process is None:
+            log.debug("stop_server called but no process is running")
             return
 
-        log.info("Stopping OpenCode server (pid %s)", self._process.pid)
+        pid = self._process.pid
+        log.info("Stopping OpenCode server (pid %s) …", pid)
         try:
             self._process.send_signal(signal.SIGTERM)
+            log.debug("Sent SIGTERM to pid %s, waiting up to 10s …", pid)
             await asyncio.wait_for(self._process.wait(), timeout=10)
+            log.info("OpenCode server (pid %s) exited gracefully", pid)
         except asyncio.TimeoutError:
-            log.warning("Force-killing OpenCode server")
+            log.warning("Force-killing OpenCode server (pid %s)", pid)
             self._process.kill()
             await self._process.wait()
+            log.info("OpenCode server (pid %s) killed", pid)
         finally:
             self._process = None
 
         if self._http and not self._http.closed:
             await self._http.close()
+            log.debug("HTTP session closed")
             self._http = None
 
     # ------------------------------------------------------------------ #
@@ -129,9 +141,12 @@ class OpenCodeClient:
 
     async def health(self) -> dict:
         """GET /global/health"""
+        log.debug("GET /global/health")
         async with self.http.get("/global/health") as resp:
             resp.raise_for_status()
-            return await resp.json()
+            data = await resp.json()
+            log.debug("GET /global/health → %s", data)
+            return data
 
     # ------------------------------------------------------------------ #
     #  Sessions
@@ -145,33 +160,47 @@ class OpenCodeClient:
         body: dict = {}
         if title:
             body["title"] = title
+        log.info("POST /session (title=%r)", title)
         async with self.http.post("/session", json=body) as resp:
             resp.raise_for_status()
-            return await resp.json()
+            data = await resp.json()
+            session_id = data.get("id") or data.get("ID", "<unknown>")
+            log.info("Session created: %s", session_id)
+            return data
 
     async def list_sessions(self) -> list[dict]:
         """GET /session"""
+        log.debug("GET /session")
         async with self.http.get("/session") as resp:
             resp.raise_for_status()
-            return await resp.json()
+            data = await resp.json()
+            log.debug("GET /session → %d session(s)", len(data))
+            return data
 
     async def get_session(self, session_id: str) -> dict:
         """GET /session/:id"""
+        log.debug("GET /session/%s", session_id[:8])
         async with self.http.get(f"/session/{session_id}") as resp:
             resp.raise_for_status()
             return await resp.json()
 
     async def delete_session(self, session_id: str) -> bool:
         """DELETE /session/:id"""
+        log.info("DELETE /session/%s", session_id[:8])
         async with self.http.delete(f"/session/{session_id}") as resp:
             resp.raise_for_status()
-            return await resp.json()
+            result = await resp.json()
+            log.info("Session %s deleted", session_id[:8])
+            return result
 
     async def abort_session(self, session_id: str) -> bool:
         """POST /session/:id/abort"""
+        log.info("POST /session/%s/abort", session_id[:8])
         async with self.http.post(f"/session/{session_id}/abort") as resp:
             resp.raise_for_status()
-            return await resp.json()
+            result = await resp.json()
+            log.info("Session %s aborted", session_id[:8])
+            return result
 
     # ------------------------------------------------------------------ #
     #  Messages
@@ -198,11 +227,21 @@ class OpenCodeClient:
         if agent:
             body["agent"] = agent
 
+        log.info(
+            "POST /session/%s/message (length=%d, model=%s, agent=%s)",
+            session_id[:8], len(content), model, agent,
+        )
         async with self.http.post(
             f"/session/{session_id}/message", json=body
         ) as resp:
             resp.raise_for_status()
-            return await resp.json()
+            data = await resp.json()
+            parts_count = len(data.get("parts", []))
+            log.info(
+                "POST /session/%s/message → %d part(s)",
+                session_id[:8], parts_count,
+            )
+            return data
 
     async def send_message_async(
         self,
@@ -221,10 +260,15 @@ class OpenCodeClient:
         if agent:
             body["agent"] = agent
 
+        log.info(
+            "POST /session/%s/prompt_async (length=%d, model=%s, agent=%s)",
+            session_id[:8], len(content), model, agent,
+        )
         async with self.http.post(
             f"/session/{session_id}/prompt_async", json=body
         ) as resp:
             resp.raise_for_status()
+            log.debug("POST /session/%s/prompt_async → accepted", session_id[:8])
 
     async def list_messages(
         self, session_id: str, *, limit: int | None = None
@@ -233,14 +277,21 @@ class OpenCodeClient:
         params: dict = {}
         if limit is not None:
             params["limit"] = limit
+        log.debug("GET /session/%s/message (limit=%s)", session_id[:8], limit)
         async with self.http.get(
             f"/session/{session_id}/message", params=params
         ) as resp:
             resp.raise_for_status()
-            return await resp.json()
+            data = await resp.json()
+            log.debug(
+                "GET /session/%s/message → %d message(s)",
+                session_id[:8], len(data),
+            )
+            return data
 
     async def get_message(self, session_id: str, message_id: str) -> dict:
         """GET /session/:id/message/:messageID"""
+        log.debug("GET /session/%s/message/%s", session_id[:8], message_id[:8])
         async with self.http.get(
             f"/session/{session_id}/message/{message_id}"
         ) as resp:
@@ -264,4 +315,9 @@ class OpenCodeClient:
         for part in parts:
             if part.get("type") == "text":
                 texts.append(part.get("text", ""))
-        return "\n".join(texts).strip() or "(no text in response)"
+        result = "\n".join(texts).strip() or "(no text in response)"
+        log.debug(
+            "extract_text: %d parts total, %d text part(s), result length=%d",
+            len(parts), len(texts), len(result),
+        )
+        return result

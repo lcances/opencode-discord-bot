@@ -39,16 +39,28 @@ def _build_app(bot: OpenCodeBot, secret_key: str) -> web.Application:
     ) -> web.StreamResponse:
         # Health endpoint is public
         if request.path == "/api/health":
+            log.debug("Health check from %s (no auth required)", request.remote)
             return await handler(request)
 
         auth_header = request.headers.get("Authorization", "")
         if not auth_header.startswith("Bearer "):
+            log.warning(
+                "Unauthorized request to %s from %s — missing Bearer token",
+                request.path,
+                request.remote,
+            )
             raise web.HTTPUnauthorized(text="Missing Bearer token")
 
         token = auth_header.removeprefix("Bearer ").strip()
         if token != secret_key:
+            log.warning(
+                "Forbidden request to %s from %s — invalid API key",
+                request.path,
+                request.remote,
+            )
             raise web.HTTPForbidden(text="Invalid API key")
 
+        log.debug("Authenticated request to %s from %s", request.path, request.remote)
         return await handler(request)
 
     app = web.Application(middlewares=[auth_middleware])
@@ -56,6 +68,7 @@ def _build_app(bot: OpenCodeBot, secret_key: str) -> web.Application:
 
     app.router.add_get("/api/health", _handle_health)
     app.router.add_post("/api/trigger", _handle_trigger)
+    log.debug("Registered API routes: GET /api/health, POST /api/trigger")
 
     return app
 
@@ -66,6 +79,7 @@ def _build_app(bot: OpenCodeBot, secret_key: str) -> web.Application:
 
 
 async def _handle_health(request: web.Request) -> web.Response:
+    log.debug("Health check OK")
     return web.json_response({"ok": True})
 
 
@@ -73,19 +87,23 @@ async def _handle_trigger(request: web.Request) -> web.Response:
     bot: OpenCodeBot = request.app["bot"]
 
     if not bot.is_ready():
+        log.warning("Trigger rejected — Discord bot is not ready yet")
         raise web.HTTPServiceUnavailable(text="Discord bot is not ready yet")
 
     try:
         body = await request.json()
     except Exception:
+        log.warning("Trigger rejected — invalid JSON body from %s", request.remote)
         raise web.HTTPBadRequest(text="Invalid JSON body")
 
     channel_name = body.get("channel_name")
     prompt = body.get("prompt")
 
     if not channel_name or not isinstance(channel_name, str):
+        log.warning("Trigger rejected — missing or invalid 'channel_name'")
         raise web.HTTPBadRequest(text="'channel_name' (string) is required")
     if not prompt or not isinstance(prompt, str):
+        log.warning("Trigger rejected — missing or invalid 'prompt'")
         raise web.HTTPBadRequest(text="'prompt' (string) is required")
 
     category = body.get("category")
@@ -109,6 +127,11 @@ async def _handle_trigger(request: web.Request) -> web.Response:
         log.error("Trigger failed: %s", exc, exc_info=True)
         raise web.HTTPInternalServerError(text=f"Internal error: {exc}")
 
+    log.info(
+        "Trigger succeeded: channel=%s, session=%s",
+        result.get("channel_name"),
+        result.get("session_id", "")[:8],
+    )
     return web.json_response(result)
 
 

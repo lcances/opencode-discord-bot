@@ -26,8 +26,11 @@ log = logging.getLogger("opencode_discord_bot")
 
 
 def load_config(path: Path) -> dict:
+    log.info("Loading config from %s", path)
     with open(path) as f:
-        return yaml.safe_load(f)
+        config = yaml.safe_load(f)
+    log.debug("Config sections: %s", list(config.keys()))
+    return config
 
 
 async def run(config: dict) -> None:
@@ -35,6 +38,12 @@ async def run(config: dict) -> None:
     oc = config.get("opencode", {})
 
     # Build OpenCode client
+    log.info(
+        "Configuring OpenCode client: %s:%s (cwd=%s)",
+        oc.get("hostname", "127.0.0.1"),
+        oc.get("port", 4096),
+        oc.get("working_directory", "."),
+    )
     client = OpenCodeClient(
         hostname=oc.get("hostname", "127.0.0.1"),
         port=oc.get("port", 4096),
@@ -44,6 +53,11 @@ async def run(config: dict) -> None:
     )
 
     # Build Discord bot
+    log.info(
+        "Configuring Discord bot (prefix=%r, allowed_channels=%s)",
+        dc.get("prefix", "!"),
+        dc.get("allowed_channels") or "<all>",
+    )
     bot = OpenCodeBot(
         opencode=client,
         allowed_channels=dc.get("allowed_channels"),
@@ -60,6 +74,7 @@ async def run(config: dict) -> None:
 
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, _signal_handler)
+    log.debug("Signal handlers registered for SIGINT, SIGTERM")
 
     try:
         # Start OpenCode server (unless already running externally)
@@ -79,12 +94,19 @@ async def run(config: dict) -> None:
         api_runner = None
         ac = config.get("api", {})
         if ac.get("enabled", False):
+            log.info(
+                "Starting API server on %s:%s",
+                ac.get("host", "127.0.0.1"),
+                ac.get("port", 8080),
+            )
             api_runner = await start_api_server(
                 bot,
                 host=ac.get("host", "127.0.0.1"),
                 port=ac.get("port", 8080),
                 secret_key=ac.get("secret_key", ""),
             )
+        else:
+            log.info("API server disabled (api.enabled not set in config)")
 
         # Wait for either the bot to crash or a shutdown signal
         done, _ = await asyncio.wait(
