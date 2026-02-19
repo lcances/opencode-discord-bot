@@ -11,6 +11,7 @@ Usage:
 import argparse
 import asyncio
 import logging
+import os
 import signal
 import sys
 from pathlib import Path
@@ -60,9 +61,13 @@ async def run(config: dict) -> None:
         loop.add_signal_handler(sig, _signal_handler)
 
     try:
-        # Start OpenCode server
-        log.info("Starting OpenCode server …")
-        await client.start_server()
+        # Start OpenCode server (unless already running externally)
+        if os.environ.get("EXTERNAL_OPENCODE"):
+            log.info("Connecting to external OpenCode server …")
+            await client._wait_healthy()
+        else:
+            log.info("Starting OpenCode server …")
+            await client.start_server()
 
         # Start Discord bot (runs until closed)
         log.info("Starting Discord bot …")
