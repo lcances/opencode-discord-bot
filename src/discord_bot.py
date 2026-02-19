@@ -205,6 +205,85 @@ class OpenCodeBot(commands.Bot):
             await message.channel.send(chunk)
 
     # ------------------------------------------------------------------ #
+    #  Programmatic API
+    # ------------------------------------------------------------------ #
+
+    async def create_session_channel(
+        self,
+        channel_name: str,
+        prompt: str,
+        *,
+        category: str | None = None,
+    ) -> dict:
+        """Programmatically create a Discord channel, bind it to an OpenCode
+        session, send *prompt* to OpenCode, and post the AI response.
+
+        This requires the bot to be fully ready (guild cache populated).
+
+        Parameters
+        ----------
+        channel_name:
+            Name of the new Discord text channel.
+        prompt:
+            The initial message to send to OpenCode.
+        category:
+            Optional category name. If it exists, the channel is created under
+            it; if it doesn't, a new category is created.
+
+        Returns
+        -------
+        dict with ``channel_id``, ``channel_name``, and ``session_id``.
+        """
+        if not self.is_ready():
+            raise RuntimeError("Bot is not ready yet")
+
+        guild = self._get_guild()
+
+        # Resolve or create category
+        discord_category: discord.CategoryChannel | None = None
+        if category:
+            discord_category = discord.utils.get(guild.categories, name=category)
+            if discord_category is None:
+                log.info("Creating category '%s' in guild '%s'", category, guild.name)
+                discord_category = await guild.create_category(category)
+
+        # Create the text channel
+        channel = await guild.create_text_channel(
+            name=channel_name,
+            category=discord_category,
+        )
+        log.info("Created channel #%s (id=%s)", channel.name, channel.id)
+
+        # Create an OpenCode session
+        session = await self.opencode.create_session(title=f"discord-{channel.name}")
+        session_id = session.get("id") or session.get("ID")
+        self._sessions[channel.id] = session_id
+        log.info("Session %s bound to #%s", session_id, channel.name)
+
+        # Send the prompt and post the response
+        try:
+            response = await self.opencode.send_message(session_id, prompt)
+            reply_text = OpenCodeClient.extract_text(response)
+        except Exception as exc:
+            log.error("OpenCode request failed: %s", exc, exc_info=True)
+            await channel.send(f"⚠️ OpenCode error: {exc}")
+            return {
+                "channel_id": channel.id,
+                "channel_name": channel.name,
+                "session_id": session_id,
+                "error": str(exc),
+            }
+
+        for chunk in chunk_message(reply_text):
+            await channel.send(chunk)
+
+        return {
+            "channel_id": channel.id,
+            "channel_name": channel.name,
+            "session_id": session_id,
+        }
+
+    # ------------------------------------------------------------------ #
     #  Cleanup
     # ------------------------------------------------------------------ #
 
@@ -221,6 +300,12 @@ class OpenCodeBot(commands.Bot):
     # ------------------------------------------------------------------ #
     #  Helpers
     # ------------------------------------------------------------------ #
+
+    def _get_guild(self) -> discord.Guild:
+        """Return the first (and assumed only) guild the bot is in."""
+        if not self.guilds:
+            raise RuntimeError("Bot is not in any guild")
+        return self.guilds[0]
 
     def _channel_allowed(self, channel: discord.abc.GuildChannel) -> bool:
         """Return True if the bot should operate in this channel."""

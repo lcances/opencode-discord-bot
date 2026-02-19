@@ -20,6 +20,7 @@ import yaml
 
 from src.opencode_client import OpenCodeClient
 from src.discord_bot import OpenCodeBot
+from src.api_server import start_api_server
 
 log = logging.getLogger("opencode_discord_bot")
 
@@ -74,6 +75,17 @@ async def run(config: dict) -> None:
         bot_task = asyncio.create_task(bot.start(dc["token"]))
         shutdown_task = asyncio.create_task(shutdown_event.wait())
 
+        # Optionally start the internal HTTP API server
+        api_runner = None
+        ac = config.get("api", {})
+        if ac.get("enabled", False):
+            api_runner = await start_api_server(
+                bot,
+                host=ac.get("host", "127.0.0.1"),
+                port=ac.get("port", 8080),
+                secret_key=ac.get("secret_key", ""),
+            )
+
         # Wait for either the bot to crash or a shutdown signal
         done, _ = await asyncio.wait(
             [bot_task, shutdown_task],
@@ -88,6 +100,9 @@ async def run(config: dict) -> None:
         pass
     finally:
         log.info("Shutting down …")
+        if api_runner is not None:
+            log.info("Stopping API server …")
+            await api_runner.cleanup()
         await bot.cleanup_sessions()
         await bot.close()
         await client.stop_server()

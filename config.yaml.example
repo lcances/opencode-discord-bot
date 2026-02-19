@@ -18,3 +18,14 @@ opencode:
   # password: ""
   # Working directory where opencode serve runs (your project root)
   working_directory: "."
+
+# Internal HTTP API for programmatic channel/session creation.
+# Use POST /api/trigger to create a channel, start a session, and send a prompt
+# without any Discord user interaction.
+api:
+  enabled: false
+  # Bind address and port for the API server
+  host: "127.0.0.1"
+  port: 8080
+  # Bearer token required in the Authorization header (leave empty to disable auth)
+  secret_key: "CHANGE_ME"
